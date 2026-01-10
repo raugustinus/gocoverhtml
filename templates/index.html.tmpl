@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+{{.CSS}}
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>{{.Title}}</h1>
+                <div class="total-coverage {{.TotalCoverageClass}}">
+                    {{printf "%.1f%%" .TotalPercent}}
+                </div>
+                <div class="stats">{{.TotalCovered}} / {{.TotalStatements}} statements</div>
+                <div class="search-container">
+                    <input type="text" id="search-input" class="search-input" placeholder="Search files (regex)..." />
+                    <span class="search-icon">&#128269;</span>
+                    <span class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</span>
+                </div>
+            </div>
+            <div class="tree" id="tree">
+{{- range .Tree.Children}}
+{{template "treenode" .}}
+{{- end}}
+            </div>
+        </aside>
+        <main class="content">
+            <div class="welcome" id="welcome">
+                <div class="welcome-icon">&#128202;</div>
+                <h2>Coverage Report</h2>
+                <p>Select a file from the tree to view its coverage details.</p>
+                <div class="legend">
+                    <div class="legend-item"><span class="legend-color covered"></span> Covered</div>
+                    <div class="legend-item"><span class="legend-color not-covered"></span> Not Covered</div>
+                </div>
+            </div>
+{{- range $path, $file := .Files}}
+            <div class="file-view" id="file-{{$file.ID}}" style="display: none;">
+                <div class="file-header">
+                    <div class="file-path">{{$file.CleanPath}}</div>
+                    <div class="file-stats">
+                        <span class="coverage-badge {{$file.CoverageClass}}">{{printf "%.1f%%" $file.Percent}}</span>
+                        <span class="stmt-count">{{$file.Covered}} / {{$file.Statements}} statements</span>
+                    </div>
+                </div>
+                <div class="code-container">
+                    <table class="code">
+                        <tbody>
+{{- range $file.Lines}}
+                            <tr class="{{.Class}}">
+                                <td class="line-num">{{.LineNum}}</td>
+                                <td class="line-content"><pre>{{.Content}}</pre></td>
+                            </tr>
+{{- end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+{{- end}}
+        </main>
+    </div>
+    <script>
+{{.JS}}
+    </script>
+</body>
+</html>
+
+{{define "treenode"}}
+{{- if .IsFile}}
+                <div class="tree-file" data-file="{{.ID}}" onclick="showFile('{{.ID}}')">
+                    <span class="tree-icon">&#128196;</span>
+                    <span class="tree-name">{{.Name}}</span>
+                    <span class="tree-percent {{.CoverageClass}}">{{printf "%.0f%%" .Percent}}</span>
+                </div>
+{{- else}}
+                <div class="tree-dir {{if .HasChildren}}expandable{{end}}">
+                    <div class="tree-dir-header" onclick="toggleDir(this)">
+                        <span class="tree-icon">&#128193;</span>
+                        <span class="tree-name">{{.Name}}</span>
+                        <span class="tree-percent {{.CoverageClass}}">{{printf "%.0f%%" .Percent}}</span>
+                    </div>
+{{- if .HasChildren}}
+                    <div class="tree-children">
+{{- range .Children}}
+{{template "treenode" .}}
+{{- end}}
+                    </div>
+{{- end}}
+                </div>
+{{- end}}
+{{end}}
