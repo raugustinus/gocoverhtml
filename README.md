@@ -1,6 +1,6 @@
 # gocoverhtml
 
-A beautiful HTML coverage report generator for Go.
+A prettified HTML coverage report generator for Go.
 
 ## Installation
 
