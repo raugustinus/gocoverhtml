@@ -12,7 +12,6 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	"html"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -50,16 +49,13 @@ func main() {
 	// Build file coverage map
 	files := buildFileCoverage(profile)
 
-	// Build tree structure
-	tree := buildTree(files)
-
 	// Read source files and annotate with coverage
 	for _, fc := range files {
 		fc.Lines = readAndAnnotateFile(srcRoot, fc)
 	}
 
 	// Generate HTML
-	htmlContent, err := generateHTML(tree, files, title, theme)
+	htmlContent, err := generateHTML(files, title, theme)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating HTML: %v\n", err)
 		os.Exit(1)
@@ -109,18 +105,6 @@ type FileCoverage struct {
 	Percent    float64
 }
 
-// TreeNode represents a node in the file tree
-type TreeNode struct {
-	Name       string
-	Path       string
-	IsFile     bool
-	Children   []*TreeNode
-	File       *FileCoverage
-	Statements int
-	Covered    int
-	Percent    float64
-}
-
 // Template data structures
 type TemplateData struct {
 	Title              string
@@ -130,24 +114,19 @@ type TemplateData struct {
 	TotalCovered       int
 	TotalStatements    int
 	TotalCoverageClass string
-	Tree               *TemplateTreeNode
-	Files              map[string]*TemplateFile
+	Groups             []*TemplateGroup
+	FileList           []*TemplateFile // flat list for file views
 }
 
-type TemplateTreeNode struct {
-	Name          string
-	Path          string
-	ID            string
-	IsFile        bool
-	HasChildren   bool
-	Children      []*TemplateTreeNode
-	Percent       float64
-	CoverageClass string
+type TemplateGroup struct {
+	Dir   string
+	Files []*TemplateFile
 }
 
 type TemplateFile struct {
 	ID            string
-	CleanPath     string
+	Name          string // just filename
+	CleanPath     string // full path for display in file view
 	Percent       float64
 	Statements    int
 	Covered       int
@@ -240,97 +219,6 @@ func buildFileCoverage(blocks map[string][]CoverageBlock) map[string]*FileCovera
 	return files
 }
 
-func buildTree(files map[string]*FileCoverage) *TreeNode {
-	root := &TreeNode{Name: "root", Path: ""}
-
-	for path, fc := range files {
-		// Remove module prefix for cleaner paths
-		cleanPath := strings.TrimPrefix(path, "insights/")
-		parts := strings.Split(cleanPath, "/")
-
-		current := root
-		currentPath := ""
-
-		for i, part := range parts {
-			if currentPath == "" {
-				currentPath = part
-			} else {
-				currentPath = currentPath + "/" + part
-			}
-
-			isFile := i == len(parts)-1
-
-			// Find or create child
-			var child *TreeNode
-			for _, c := range current.Children {
-				if c.Name == part {
-					child = c
-					break
-				}
-			}
-
-			if child == nil {
-				child = &TreeNode{
-					Name:   part,
-					Path:   currentPath,
-					IsFile: isFile,
-				}
-				if isFile {
-					child.File = fc
-				}
-				current.Children = append(current.Children, child)
-			}
-
-			current = child
-		}
-	}
-
-	// Calculate coverage for each node (bottom-up)
-	calculateTreeCoverage(root)
-
-	// Sort children at each level
-	sortTree(root)
-
-	return root
-}
-
-func calculateTreeCoverage(node *TreeNode) (statements, covered int) {
-	if node.IsFile && node.File != nil {
-		node.Statements = node.File.Statements
-		node.Covered = node.File.Covered
-		node.Percent = node.File.Percent
-		return node.Statements, node.Covered
-	}
-
-	for _, child := range node.Children {
-		s, c := calculateTreeCoverage(child)
-		statements += s
-		covered += c
-	}
-
-	node.Statements = statements
-	node.Covered = covered
-	if statements > 0 {
-		node.Percent = float64(covered) / float64(statements) * 100
-	}
-
-	return statements, covered
-}
-
-func sortTree(node *TreeNode) {
-	// Sort: directories first, then files, alphabetically
-	sort.Slice(node.Children, func(i, j int) bool {
-		if node.Children[i].IsFile != node.Children[j].IsFile {
-			return !node.Children[i].IsFile // directories first
-		}
-		return node.Children[i].Name < node.Children[j].Name
-	})
-
-	for _, child := range node.Children {
-		sortTree(child)
-	}
-}
-
 func readAndAnnotateFile(srcRoot string, fc *FileCoverage) []LineCoverage {
 	// Try to find the source file
 	cleanPath := strings.TrimPrefix(fc.Path, "insights/")
@@ -368,7 +256,7 @@ func readAndAnnotateFile(srcRoot string, fc *FileCoverage) []LineCoverage {
 	return result
 }
 
-func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme string) (string, error) {
+func generateHTML(files map[string]*FileCoverage, title, theme string) (string, error) {
 	// Load templates
 	tmpl, err := template.ParseFS(templatesFS, "templates/index.html.tmpl")
 	if err != nil {
@@ -391,14 +279,24 @@ func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme s
 		return "", fmt.Errorf("reading JS: %w", err)
 	}
 
-	// Convert tree to template tree
-	templateTree := convertTreeNode(tree)
+	// Build sorted file list and calculate totals
+	var fileList []*TemplateFile
+	var totalStatements, totalCovered int
+	groupMap := make(map[string][]*TemplateFile)
 
-	// Convert files to template files
-	templateFiles := make(map[string]*TemplateFile)
-	for path, fc := range files {
+	// Get sorted paths
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		fc := files[path]
 		cleanPath := strings.TrimPrefix(path, "insights/")
 		fileID := pathToID(cleanPath)
+		dir := filepath.Dir(cleanPath)
+		name := filepath.Base(cleanPath)
 
 		lines := make([]TemplateLine, len(fc.Lines))
 		for i, line := range fc.Lines {
@@ -410,13 +308,14 @@ func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme s
 			}
 			lines[i] = TemplateLine{
 				LineNum: line.LineNum,
-				Content: html.EscapeString(line.Content),
+				Content: line.Content,
 				Class:   class,
 			}
 		}
 
-		templateFiles[path] = &TemplateFile{
+		tf := &TemplateFile{
 			ID:            fileID,
+			Name:          name,
 			CleanPath:     cleanPath,
 			Percent:       fc.Percent,
 			Statements:    fc.Statements,
@@ -424,6 +323,33 @@ func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme s
 			CoverageClass: getCoverageClass(fc.Percent),
 			Lines:         lines,
 		}
+
+		fileList = append(fileList, tf)
+		groupMap[dir] = append(groupMap[dir], tf)
+
+		totalStatements += fc.Statements
+		totalCovered += fc.Covered
+	}
+
+	// Build sorted groups
+	dirs := make([]string, 0, len(groupMap))
+	for dir := range groupMap {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+
+	var groups []*TemplateGroup
+	for _, dir := range dirs {
+		groups = append(groups, &TemplateGroup{
+			Dir:   dir,
+			Files: groupMap[dir],
+		})
+	}
+
+	// Calculate total percentage
+	var totalPercent float64
+	if totalStatements > 0 {
+		totalPercent = float64(totalCovered) / float64(totalStatements) * 100
 	}
 
 	// Prepare template data
@@ -431,12 +357,12 @@ func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme s
 		Title:              title,
 		CSS:                template.CSS(cssBytes),
 		JS:                 template.JS(jsBytes),
-		TotalPercent:       tree.Percent,
-		TotalCovered:       tree.Covered,
-		TotalStatements:    tree.Statements,
-		TotalCoverageClass: getCoverageClass(tree.Percent),
-		Tree:               templateTree,
-		Files:              templateFiles,
+		TotalPercent:       totalPercent,
+		TotalCovered:       totalCovered,
+		TotalStatements:    totalStatements,
+		TotalCoverageClass: getCoverageClass(totalPercent),
+		Groups:             groups,
+		FileList:           fileList,
 	}
 
 	// Execute template
@@ -446,24 +372,6 @@ func generateHTML(tree *TreeNode, files map[string]*FileCoverage, title, theme s
 	}
 
 	return buf.String(), nil
-}
-
-func convertTreeNode(node *TreeNode) *TemplateTreeNode {
-	templateNode := &TemplateTreeNode{
-		Name:          node.Name,
-		Path:          node.Path,
-		ID:            pathToID(node.Path),
-		IsFile:        node.IsFile,
-		HasChildren:   len(node.Children) > 0,
-		Percent:       node.Percent,
-		CoverageClass: getCoverageClass(node.Percent),
-	}
-
-	for _, child := range node.Children {
-		templateNode.Children = append(templateNode.Children, convertTreeNode(child))
-	}
-
-	return templateNode
 }
 
 func pathToID(path string) string {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
 {{.CSS}}
     </style>
@@ -18,41 +18,69 @@
                     {{printf "%.1f%%" .TotalPercent}}
                 </div>
                 <div class="stats">{{.TotalCovered}} / {{.TotalStatements}} statements</div>
-                <div class="search-container">
-                    <input type="text" id="search-input" class="search-input" placeholder="Search files (regex)..." />
-                    <span class="search-icon">&#128269;</span>
-                    <span class="search-clear" id="search-clear" onclick="clearSearch()">&#10005;</span>
+                <div class="filters">
+                    <div class="filter-group">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn high" data-filter="high">High</button>
+                        <button class="filter-btn medium" data-filter="medium">Medium</button>
+                        <button class="filter-btn low" data-filter="low">Low</button>
+                        <button class="filter-btn none" data-filter="none">None</button>
+                    </div>
+                    <div class="sort-group">
+                        <select id="sort-select" class="sort-select" onchange="sortFiles(this.value)">
+                            <option value="name">Sort by Name</option>
+                            <option value="coverage-asc">Coverage (Low to High)</option>
+                            <option value="coverage-desc">Coverage (High to Low)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
-            <div class="tree" id="tree">
-{{- range .Tree.Children}}
-{{template "treenode" .}}
+            <nav class="file-list" id="file-list">
+{{- range .Groups}}
+                <div class="file-group" data-dir="{{.Dir}}">
+                    <div class="group-header">{{.Dir}}</div>
+{{- range .Files}}
+                    <a href="#" class="file-item" data-file="{{.ID}}" data-coverage="{{.CoverageClass}}" data-percent="{{printf "%.2f" .Percent}}" onclick="showFile('{{.ID}}'); return false;">
+                        <span class="file-name">{{.Name}}</span>
+                        <span class="file-badge {{.CoverageClass}}">{{printf "%.0f%%" .Percent}}</span>
+                    </a>
 {{- end}}
-            </div>
+                </div>
+{{- end}}
+            </nav>
         </aside>
         <main class="content">
+            <div class="content-header">
+                <button class="command-palette-trigger" id="command-palette-trigger" onclick="openCommandPalette()">
+                    <svg class="trigger-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                    </svg>
+                    <span class="trigger-text">Search files...</span>
+                    <kbd class="trigger-kbd"><span class="kbd-modifier"></span>K</kbd>
+                </button>
+            </div>
             <div class="welcome" id="welcome">
                 <div class="welcome-icon">&#128202;</div>
                 <h2>Coverage Report</h2>
-                <p>Select a file from the tree to view its coverage details.</p>
+                <p>Select a file from the list to view its coverage details.</p>
                 <div class="legend">
                     <div class="legend-item"><span class="legend-color covered"></span> Covered</div>
                     <div class="legend-item"><span class="legend-color not-covered"></span> Not Covered</div>
                 </div>
             </div>
-{{- range $path, $file := .Files}}
-            <div class="file-view" id="file-{{$file.ID}}" style="display: none;">
+{{- range .FileList}}
+            <div class="file-view" id="file-{{.ID}}" style="display: none;">
                 <div class="file-header">
-                    <div class="file-path">{{$file.CleanPath}}</div>
+                    <div class="file-path">{{.CleanPath}}</div>
                     <div class="file-stats">
-                        <span class="coverage-badge {{$file.CoverageClass}}">{{printf "%.1f%%" $file.Percent}}</span>
-                        <span class="stmt-count">{{$file.Covered}} / {{$file.Statements}} statements</span>
+                        <span class="coverage-badge {{.CoverageClass}}">{{printf "%.1f%%" .Percent}}</span>
+                        <span class="stmt-count">{{.Covered}} / {{.Statements}} statements</span>
                     </div>
                 </div>
                 <div class="code-container">
                     <table class="code">
                         <tbody>
-{{- range $file.Lines}}
+{{- range .Lines}}
                             <tr class="{{.Class}}">
                                 <td class="line-num">{{.LineNum}}</td>
                                 <td class="line-content"><pre>{{.Content}}</pre></td>
@@ -65,33 +93,32 @@
 {{- end}}
         </main>
     </div>
+    <!-- Command Palette Modal -->
+    <div class="command-palette-overlay" id="command-palette-overlay" onclick="closeCommandPalette()"></div>
+    <div class="command-palette" id="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title">
+        <div class="command-palette-header">
+            <svg class="palette-search-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+            </svg>
+            <input type="text" id="command-palette-input" class="command-palette-input" placeholder="Search files..." autocomplete="off" />
+        </div>
+        <div class="command-palette-results" id="command-palette-results">
+            <!-- Results will be populated by JavaScript -->
+        </div>
+        <div class="command-palette-footer">
+            <div class="palette-hint">
+                <kbd>&#8593;</kbd><kbd>&#8595;</kbd> to navigate
+            </div>
+            <div class="palette-hint">
+                <kbd>&#8629;</kbd> to select
+            </div>
+            <div class="palette-hint">
+                <kbd>esc</kbd> to close
+            </div>
+        </div>
+    </div>
     <script>
 {{.JS}}
     </script>
 </body>
 </html>
-
-{{define "treenode"}}
-{{- if .IsFile}}
-                <div class="tree-file" data-file="{{.ID}}" onclick="showFile('{{.ID}}')">
-                    <span class="tree-icon">&#128196;</span>
-                    <span class="tree-name">{{.Name}}</span>
-                    <span class="tree-percent {{.CoverageClass}}">{{printf "%.0f%%" .Percent}}</span>
-                </div>
-{{- else}}
-                <div class="tree-dir {{if .HasChildren}}expandable{{end}}">
-                    <div class="tree-dir-header" onclick="toggleDir(this)">
-                        <span class="tree-icon">&#128193;</span>
-                        <span class="tree-name">{{.Name}}</span>
-                        <span class="tree-percent {{.CoverageClass}}">{{printf "%.0f%%" .Percent}}</span>
-                    </div>
-{{- if .HasChildren}}
-                    <div class="tree-children">
-{{- range .Children}}
-{{template "treenode" .}}
-{{- end}}
-                    </div>
-{{- end}}
-                </div>
-{{- end}}
-{{end}}
